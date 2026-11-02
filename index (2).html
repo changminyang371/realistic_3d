@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <!-- 設定響應式視埠，確保在不同螢幕尺寸上皆能滿版顯示 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>nigger shooting</title>
+    <!-- 引入 Tailwind CSS CDN 以進行快速且美觀的 UI 介面佈局 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 Three.js 核心庫，提供 3D 場景渲染功能 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        /* 隱藏滾動條並固定全螢幕 */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            user-select: none;
+            background-color: #05050a;
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* 抬頭顯示器 (HUD): 顯示血量、分數、彈藥 */
+        #hud {
+            pointer-events: none;
+        }
+
+        /* 怪物頭頂血條 UI 樣式 */
+        .monster-hp-container {
+            position: absolute;
+            width: 50px;
+            height: 6px;
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 3px;
+            transform: translate(-50%, -100%);
+            pointer-events: none;
+            overflow: hidden;
+            display: none;
+        }
+        .monster-hp-fill {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, #ef4444, #22c55e);
+            transition: width 0.1s ease;
+        }
+    </style>
+</head>
+<body class="relative">
+
+    <!-- 3D 渲染畫布容器 -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- 怪物頭頂動態血條容器 (由 JS 動態生成) -->
+    <div id="monster-hp-layer" class="pointer-events-none absolute inset-0 overflow-hidden z-10"></div>
+
+    <!-- 準心 Overlay -->
+    <div id="crosshair" class="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div class="w-2 h-2 bg-red-500 rounded-full border border-white opacity-80"></div>
+        <div class="absolute w-6 h-[2px] bg-white opacity-40"></div>
+        <div class="absolute h-6 w-[2px] bg-white opacity-40"></div>
+    </div>
+
+    <!-- 玩家受傷時顯示的紅色閃爍邊框 -->
+    <div id="damage-indicator" class="pointer-events-none absolute inset-0 border-8 border-red-600/80 hidden"></div>
+
+    <!-- 抬頭顯示器 (HUD): 顯示血量、分數、彈藥 -->
+    <div id="hud" class="pointer-events-none absolute inset-0 p-6 flex flex-col justify-between text-white font-mono z-10">
+        <!-- 頂部資訊欄 -->
+        <div class="flex justify-between items-start">
+            <!-- 生命值條 -->
+            <div class="bg-slate-900/80 backdrop-blur border border-slate-700 p-4 rounded-xl w-64 shadow-2xl">
+                <div class="flex justify-between mb-1 text-sm font-bold text-slate-300">
+                    <span>HEALTH</span>
+                    <span id="hp-text">100 / 100</span>
+                </div>
+                <div class="w-full bg-slate-800 h-4 rounded-full overflow-hidden border border-slate-600">
+                    <div id="hp-bar" class="bg-gradient-to-r from-red-600 to-emerald-500 h-full w-full transition-all duration-300"></div>
+                </div>
+            </div>
+
+            <!-- 波數與得分標籤 -->
+            <div class="flex gap-4">
+                <div class="bg-slate-900/80 backdrop-blur border border-slate-700 px-5 py-3 rounded-xl shadow-2xl text-center">
+                    <div class="text-xs text-slate-400">WAVE</div>
+                    <div id="wave-text" class="text-3xl font-extrabold text-cyan-400 tracking-wider">1</div>
+                </div>
+                <div class="bg-slate-900/80 backdrop-blur border border-slate-700 px-6 py-3 rounded-xl shadow-2xl text-center">
+                    <div class="text-xs text-slate-400">SCORE</div>
+                    <div id="score-text" class="text-3xl font-extrabold text-amber-400 tracking-wider">0</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部彈藥欄與按鍵提示 -->
+        <div class="flex justify-between items-end">
+            <div class="bg-slate-900/60 backdrop-blur border border-slate-800 px-4 py-2 rounded-lg text-xs text-slate-400">
+                [W,A,S,D] 移動 | [滑鼠] 瞄準 | [左鍵] 開火 | [R] 換彈
+            </div>
+
+            <div class="bg-slate-900/80 backdrop-blur border border-slate-700 p-4 rounded-xl text-right shadow-2xl">
+                <div class="text-xs text-slate-400">AMMO</div>
+                <div class="text-3xl font-extrabold tracking-widest text-cyan-400">
+                    <span id="ammo-clip">30</span><span class="text-slate-500 text-lg">/30</span>
+                </div>
+                <div id="reload-hint" class="text-xs text-amber-500 font-bold hidden animate-pulse mt-1">按 [R] 換彈藥</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 遊戲開始 / 暫停 / 死亡 Overlay 選單 -->
+    <div id="menu-overlay" class="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center z-20 text-white p-6">
+        <div class="max-w-md w-full bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl text-center">
+            <h1 id="menu-title" class="text-4xl font-black mb-2 text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 uppercase">
+                nigger shooting
+            </h1>
+            <p id="menu-sub" class="text-slate-400 text-sm mb-6">寫實風 3D 夜間生存射擊</p>
+            
+            <div class="space-y-3 mb-8 text-left text-xs text-slate-300 bg-slate-950/50 p-4 rounded-lg border border-slate-800/80">
+                <p>🌑 <b>環境：</b> 靜止暗夜、高空明月與閃爍星空。</p>
+                <p>👾 <b>目標：</b> 消滅不斷湧現的夜間異種怪物並生存下去。</p>
+                <p>🎯 <b>操作：</b> 點擊下方按鈕鎖定滑鼠進入第一人稱控制。</p>
+            </div>
+
+            <button id="start-btn" class="w-full py-4 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold rounded-xl shadow-lg transition-all transform hover:scale-105 active:scale-95 text-lg cursor-pointer">
+                開始遊戲 (點擊鎖定視角)
+            </button>
+        </div>
+    </div>
+
+    <!-- 遊戲主要邏輯 JavaScript 程式碼 -->
+    <script>
+        // ==========================================
+        // 1. 全局變數定義與遊戲狀態初始化
+        // ==========================================
+        let scene, camera, renderer;
+        let starsField, moonLight;
+        let clock = new THREE.Clock();
+
+        // 波數與生成控制變數
+        const waveSystem = {
+            currentWave: 1,
+            monstersToSpawn: 5,     // 當前波數尚需生成的怪物數
+            spawnedCount: 0,        // 目前已生成數
+            killedCount: 0,         // 當前波數已擊殺數
+            isWaveActive: true,
+            spawnTimer: 0,
+            spawnInterval: 2.0      // 生成間隔 (秒)
+        };
+
+        // 玩家狀態變數
+        const player = {
+            height: 1.7,           // 玩家眼睛高度 (公尺)
+            hp: 100,
+            maxHp: 100,
+            score: 0,
+            ammo: 30,
+            maxAmmo: 30,
+            isReloading: false,
+            speed: 0.12,
+            velocity: new THREE.Vector3(),
+            moveForward: false,
+            moveBackward: false,
+            moveLeft: false,
+            moveRight: false,
+            canShoot: true,
+            isAlive: true
+        };
+
+        // Pointer Lock (第一人稱視角控制相關)
+        let isLocked = false;
+        const euler = new THREE.Euler(0, 0, 0, 'YXZ');
+        const minPolarAngle = 0.1;
+        const maxPolarAngle = Math.PI - 0.1;
+
+        // 槍枝模型與相機組件
+        let gunGroup = new THREE.Group();
+        let muzzleFlashLight;
+
+        // 遊戲物體集合
+        let enemies = [];
+        let bullets = [];
+        let particles = [];
+        let lights = [];
+
+        // UI 元素 DOM 引用
+        const hpBarEl = document.getElementById('hp-bar');
+        const hpTextEl = document.getElementById('hp-text');
+        const scoreTextEl = document.getElementById('score-text');
+        const waveTextEl = document.getElementById('wave-text');
+        const ammoClipEl = document.getElementById('ammo-clip');
+        const reloadHintEl = document.getElementById('reload-hint');
+        const menuOverlay = document.getElementById('menu-overlay');
+        const startBtn = document.getElementById('start-btn');
+        const menuTitle = document.getElementById('menu-title');
+        const menuSub = document.getElementById('menu-sub');
+        const damageIndicator = document.getElementById('damage-indicator');
+        const monsterHpLayer = document.getElementById('monster-hp-layer');
+
+        // ==========================================
+        // 2. 場景與初始化函數 (Init System)
+        // ==========================================
+        function init() {
+            // 創建 Three.js 場景與暗夜霧氣效果
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050714);
+            scene.fog = new THREE.FogExp2(0x050714, 0.035);
+
+            // 創建相機 (第一人稱視角)
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, player.height, 0);
+
+            // 創建渲染器
+            const canvas = document.getElementById('game-canvas');
+            renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+            // 建立環境光源
+            const ambientLight = new THREE.AmbientLight(0x1a2035, 0.8);
+            scene.add(ambientLight);
+
+            // 建立月光 (平行光源與陰影)
+            moonLight = new THREE.DirectionalLight(0x88aacc, 1.2);
+            moonLight.position.set(40, 80, -30);
+            moonLight.castShadow = true;
+            moonLight.shadow.mapSize.width = 2048;
+            moonLight.shadow.mapSize.height = 2048;
+            moonLight.shadow.camera.near = 0.5;
+            moonLight.shadow.camera.far = 150;
+            moonLight.shadow.camera.left = -40;
+            moonLight.shadow.camera.right = 40;
+            moonLight.shadow.camera.top = 40;
+            moonLight.shadow.camera.bottom = -40;
+            scene.add(moonLight);
+
+            // 建立夜空星空點陣粒子
+            const starsGeo = new THREE.BufferGeometry();
+            const starsCount = 1500;
+            const starPositions = new Float32Array(starsCount * 3);
+            for (let i = 0; i < starsCount * 3; i += 3) {
+                starPositions[i] = (Math.random() - 0.5) * 300;
+                starPositions[i + 1] = Math.random() * 100 + 10;
+                starPositions[i + 2] = (Math.random() - 0.5) * 300;
+            }
+            starsGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+            const starsMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.6, transparent: true, opacity: 0.8 });
+            starsField = new THREE.Points(starsGeo, starsMat);
+            scene.add(starsField);
+
+            // 建立高空月亮實體球體
+            const moonGeo = new THREE.SphereGeometry(4, 32, 32);
+            const moonMat = new THREE.MeshBasicMaterial({ color: 0xe0f2fe });
+            const moonMesh = new THREE.Mesh(moonGeo, moonMat);
+            moonMesh.position.set(80, 160, -60);
+            scene.add(moonMesh);
+
+            // 建立地面與寫實材質
+            const floorGeo = new THREE.PlaneGeometry(200, 200);
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8, metalness: 0.2 });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            // 建立場景氛圍路燈與障礙物
+            createEnvironmentProps();
+
+            // 建立第一人稱槍枝模型
+            createWeaponModel();
+
+            // 設定事件監聽器
+            setupEvents();
+
+            // 開始渲染循環
+            animate();
+        }
+
+        // 創建場景道具 (路燈、障礙物)
+        function createEnvironmentProps() {
+            // 隨機生成路燈與夜間點光源
+            for (let i = -2; i <= 2; i++) {
+                for (let j = -2; j <= 2; j++) {
+                    if (i === 0 && j === 0) continue;
+                    const x = i * 25 + (Math.random() - 0.5) * 5;
+                    const z = j * 25 + (Math.random() - 0.5) * 5;
+
+                    // 燈柱
+                    const poleGeo = new THREE.CylinderGeometry(0.1, 0.15, 6, 8);
+                    const poleMat = new THREE.MeshStandardMaterial({ color: 0x334155 });
+                    const pole = new THREE.Mesh(poleGeo, poleMat);
+                    pole.position.set(x, 3, z);
+                    pole.castShadow = true;
+                    scene.add(pole);
+
+                    // 發光燈頭
+                    const lightGeo = new THREE.SphereGeometry(0.3, 16, 16);
+                    const lightMat = new THREE.MeshBasicMaterial({ color: 0xfde047 });
+                    const lamp = new THREE.Mesh(lightGeo, lightMat);
+                    lamp.position.set(x, 6, z);
+                    scene.add(lamp);
+
+                    // 暖色點光源
+                    const pointLight = new THREE.PointLight(0xfde047, 1.2, 18);
+                    pointLight.position.set(x, 5.8, z);
+                    scene.add(pointLight);
+                }
+            }
+        }
+
+        // ==========================================
+        // 3. 敵人 AI 生成與多類型追逐邏輯
+        // ==========================================
+        
+        // 怪物種類屬性定義 (不同外觀與能力)
+        const MONSTER_TYPES = {
+            WALKER: {
+                name: '普通異變者',
+                color: 0x2d3748,
+                eyeColor: 0xff0033,
+                scale: 1.0,
+                hp: 3,
+                maxHp: 3,
+                speed: 0.04,
+                damage: 15,
+                score: 100
+            },
+            RUNNER: {
+                name: '疾行惡鬼',
+                color: 0x581c87,
+                eyeColor: 0x38bdf8,
+                scale: 0.8,
+                hp: 2,
+                maxHp: 2,
+                speed: 0.075,
+                damage: 10,
+                score: 150
+            },
+            TANK: {
+                name: '重型巨魔',
+                color: 0x1e3a8a,
+                eyeColor: 0xf59e0b,
+                scale: 1.4,
+                hp: 8,
+                maxHp: 8,
+                speed: 0.025,
+                damage: 30,
+                score: 300
+            }
+        };
+
+        // 動態生成怪物邏輯
+        function spawnEnemy() {
+            if (!player.isAlive || waveSystem.spawnedCount >= waveSystem.monstersToSpawn) return;
+
+            // 根據波數隨機選擇怪物種類
+            let typeKey = 'WALKER';
+            const rand = Math.random();
+            if (waveSystem.currentWave >= 2 && rand > 0.6) typeKey = 'RUNNER';
+            if (waveSystem.currentWave >= 3 && rand > 0.85) typeKey = 'TANK';
+
+            const config = MONSTER_TYPES[typeKey];
+            const enemyGroup = new THREE.Group();
+
+            // 1. 怪物身體模型 (簡化寫實風風格)
+            const bodyGeo = new THREE.CylinderGeometry(0.4 * config.scale, 0.3 * config.scale, 1.8 * config.scale, 12);
+            const bodyMat = new THREE.MeshStandardMaterial({ color: config.color, roughness: 0.4, metalness: 0.3 });
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = 0.9 * config.scale;
+            body.castShadow = true;
+            enemyGroup.add(body);
+
+            // 2. 怪物發光雙眼 (發光特效)
+            const eyeGeo = new THREE.SphereGeometry(0.08 * config.scale, 8, 8);
+            const eyeMat = new THREE.MeshBasicMaterial({ color: config.eyeColor });
+            const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
+            leftEye.position.set(-0.15 * config.scale, 1.4 * config.scale, -0.35 * config.scale);
+            const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
+            rightEye.position.set(0.15 * config.scale, 1.4 * config.scale, -0.35 * config.scale);
+            enemyGroup.add(leftEye);
+            enemyGroup.add(rightEye);
+
+            // 隨機於玩家半徑 25~45 公尺處生成 (地圖周圍 Spawn Points)
+            const angle = Math.random() * Math.PI * 2;
+            const distance = 25 + Math.random() * 20;
+            enemyGroup.position.x = camera.position.x + Math.sin(angle) * distance;
+            enemyGroup.position.z = camera.position.z + Math.cos(angle) * distance;
+
+            // 創建 2D DOM 抬頭血條
+            const hpBarContainer = document.createElement('div');
+            hpBarContainer.className = 'monster-hp-container';
+            const hpBarFill = document.createElement('div');
+            hpBarFill.className = 'monster-hp-fill';
+            hpBarContainer.appendChild(hpBarFill);
+            monsterHpLayer.appendChild(hpBarContainer);
+
+            // 怪物個體資料設定
+            enemyGroup.userData = {
+                type: typeKey,
+                hp: config.hp,
+                maxHp: config.maxHp,
+                speed: config.speed + (waveSystem.currentWave * 0.002), // 隨波數稍稍加載移動速度
+                damage: config.damage,
+                score: config.score,
+                heightOffset: 1.8 * config.scale,
+                lastAttack: 0,
+                hpContainer: hpBarContainer,
+                hpFill: hpBarFill,
+                isDissolving: false,
+                dissolveTime: 0
+            };
+
+            scene.add(enemyGroup);
+            enemies.push(enemyGroup);
+            waveSystem.spawnedCount++;
+        }
+
+        // 更新怪物頭頂 2D 血條在螢幕上的位置
+        function updateMonsterHpBars() {
+            const tempV = new THREE.Vector3();
+            enemies.forEach(enemy => {
+                if (enemy.userData.isDissolving) {
+                    enemy.userData.hpContainer.style.display = 'none';
+                    return;
+                }
+
+                // 取得怪物頭頂世界座標
+                enemy.getWorldPosition(tempV);
+                tempV.y += enemy.userData.heightOffset + 0.3;
+
+                // 轉為螢幕 NDC 座標
+                tempV.project(camera);
+
+                // 在相機視野前方且離玩家不太遠時顯示血條
+                if (tempV.z < 1 && camera.position.distanceTo(enemy.position) < 40) {
+                    const x = (tempV.x * .5 + .5) * window.innerWidth;
+                    const y = (-(tempV.y * .5) + .5) * window.innerHeight;
+                    enemy.userData.hpContainer.style.left = `${x}px`;
+                    enemy.userData.hpContainer.style.top = `${y}px`;
+                    enemy.userData.hpContainer.style.display = 'block';
+
+                    // 更新血條比例
+                    const pct = Math.max(0, (enemy.userData.hp / enemy.userData.maxHp) * 100);
+                    enemy.userData.hpFill.style.width = `${pct}%`;
+                } else {
+                    enemy.userData.hpContainer.style.display = 'none';
+                }
+            });
+        }
+
+        // 擊中效果與死亡散落/溶解粒子動畫
+        function createHitParticles(pos, isFatal = false, colorHex = 0xff1100) {
+            const count = isFatal ? 35 : 12;
+            for (let i = 0; i < count; i++) {
+                const pGeo = new THREE.SphereGeometry(0.04 + Math.random() * (isFatal ? 0.08 : 0.04), 4, 4);
+                const pMat = new THREE.MeshBasicMaterial({ color: colorHex });
+                const particle = new THREE.Mesh(pGeo, pMat);
+
+                particle.position.copy(pos);
+                particle.velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * (isFatal ? 0.5 : 0.2),
+                    Math.random() * (isFatal ? 0.4 : 0.2),
+                    (Math.random() - 0.5) * (isFatal ? 0.5 : 0.2)
+                );
+                particle.life = 1.0;
+
+                scene.add(particle);
+                particles.push(particle);
+            }
+        }
+
+        // 波數 (Wave) 控制邏輯系統
+        function updateWaveSystem(delta) {
+            if (!waveSystem.isWaveActive || !player.isAlive) return;
+
+            // 定時生成怪物
+            waveSystem.spawnTimer += delta;
+            if (waveSystem.spawnTimer >= waveSystem.spawnInterval && waveSystem.spawnedCount < waveSystem.monstersToSpawn) {
+                spawnEnemy();
+                waveSystem.spawnTimer = 0;
+            }
+
+            // 當該波怪物全數消滅 -> 進入下一波
+            if (waveSystem.killedCount >= waveSystem.monstersToSpawn) {
+                waveSystem.currentWave++;
+                waveSystem.monstersToSpawn = 4 + waveSystem.currentWave * 3; // 每波數量遞增
+                waveSystem.spawnedCount = 0;
+                waveSystem.killedCount = 0;
+                waveSystem.spawnInterval = Math.max(0.6, 2.0 - waveSystem.currentWave * 0.15); // 生成速度變快
+
+                waveTextEl.innerText = waveSystem.currentWave;
+            }
+        }
+
+        // ==========================================
+        // 4. 玩家武器系統 (FP Perspective Gun)
+        // ==========================================
+        function createWeaponModel() {
+            // 槍主體容器
+            gunGroup = new THREE.Group();
+
+            // 槍身 (Receiver)
+            const bodyGeo = new THREE.BoxGeometry(0.1, 0.12, 0.5);
+            const darkMetalMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.8, roughness: 0.3 });
+            const gunBody = new THREE.Mesh(bodyGeo, darkMetalMat);
+            gunBody.position.set(0, 0, 0);
+            gunGroup.add(gunBody);
+
+            // 槍管 (Barrel)
+            const barrelGeo = new THREE.CylinderGeometry(0.025, 0.025, 0.4, 16);
+            const barrel = new THREE.Mesh(barrelGeo, darkMetalMat);
+            barrel.rotation.x = Math.PI / 2;
+            barrel.position.set(0, 0.03, -0.35);
+            gunGroup.add(barrel);
+
+            // 彈匣 (Magazine)
+            const magGeo = new THREE.BoxGeometry(0.06, 0.2, 0.08);
+            const magMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.5 });
+            const mag = new THREE.Mesh(magGeo, magMat);
+            mag.position.set(0, -0.1, -0.05);
+            mag.rotation.x = -0.2;
+            gunGroup.add(mag);
+
+            // 瞄準鏡 (Sight)
+            const scopeGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.1, 12);
+            const scopeMat = new THREE.MeshStandardMaterial({ color: 0x050505, metalness: 0.9 });
+            const scope = new THREE.Mesh(scopeGeo, scopeMat);
+            scope.rotation.x = Math.PI / 2;
+            scope.position.set(0, 0.08, -0.1);
+            gunGroup.add(scope);
+
+            // 開火槍口火光 (Point Light Glow)
+            muzzleFlashLight = new THREE.PointLight(0xffaa22, 0, 5);
+            muzzleFlashLight.position.set(0, 0.03, -0.6);
+            gunGroup.add(muzzleFlashLight);
+
+            // 將槍綁定在相機前方右下角 (第一人稱視角)
+            gunGroup.position.set(0.25, -0.22, -0.45);
+            camera.add(gunGroup);
+            scene.add(camera);
+        }
+
+        // 射擊邏輯
+        function shoot() {
+            if (!player.canShoot || player.isReloading || !isLocked || !player.isAlive) return;
+
+            if (player.ammo <= 0) {
+                reloadHintEl.classList.remove('hidden');
+                return;
+            }
+
+            player.ammo--;
+            ammoClipEl.innerText = player.ammo;
+            player.canShoot = false;
+
+            // 槍枝後座力動畫
+            gunGroup.position.z = -0.35;
+            gunGroup.rotation.x = 0.1;
+
+            // 開火槍口亮光閃爍
+            muzzleFlashLight.intensity = 4.0;
+            setTimeout(() => {
+                muzzleFlashLight.intensity = 0;
+                gunGroup.position.z = -0.45;
+                gunGroup.rotation.x = 0;
+            }, 60);
+
+            // 生成子彈實體 (3D Bullet Ray/Mesh)
+            createBullet();
+
+            // 射擊冷卻時間
+            setTimeout(() => {
+                player.canShoot = true;
+            }, 130);
+        }
+
+        // 創建發射出之子彈
+        function createBullet() {
+            const bulletGeo = new THREE.SphereGeometry(0.05, 8, 8);
+            const bulletMat = new THREE.MeshBasicMaterial({ color: 0xffcc44 });
+            const bullet = new THREE.Mesh(bulletGeo, bulletMat);
+
+            // 從槍口位置發射
+            const vector = new THREE.Vector3(0, 0, -1);
+            vector.applyQuaternion(camera.quaternion);
+
+            bullet.position.copy(camera.position).add(vector.clone().multiplyScalar(0.5));
+            bullet.velocity = vector.multiplyScalar(1.5); // 子彈移動速度
+            bullet.aliveTime = 0;
+
+            scene.add(bullet);
+            bullets.push(bullet);
+        }
+
+        // 換彈藥邏輯
+        function reload() {
+            if (player.isReloading || player.ammo === player.maxAmmo) return;
+
+            player.isReloading = true;
+            reloadHintEl.classList.remove('hidden');
+            reloadHintEl.innerText = "換彈中...";
+
+            // 換彈槍枝旋轉傾斜動畫
+            gunGroup.rotation.z = -0.5;
+            gunGroup.rotation.x = -0.3;
+
+            setTimeout(() => {
+                player.ammo = player.maxAmmo;
+                ammoClipEl.innerText = player.ammo;
+                player.isReloading = false;
+                reloadHintEl.classList.add('hidden');
+                reloadHintEl.innerText = "按 [R] 換彈藥";
+                gunGroup.rotation.z = 0;
+                gunGroup.rotation.x = 0;
+            }, 1200); // 換彈所需 1.2 秒
+        }
+
+        // 擊中效果 (血花粒子)
+        function createHitParticles(pos) {
+            for (let i = 0; i < 12; i++) {
+                const pGeo = new THREE.SphereGeometry(0.04 + Math.random() * 0.04, 4, 4);
+                const pMat = new THREE.MeshBasicMaterial({ color: 0xff1100 });
+                const particle = new THREE.Mesh(pGeo, pMat);
+
+                particle.position.copy(pos);
+                particle.velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.2,
+                    Math.random() * 0.2,
+                    (Math.random() - 0.5) * 0.2
+                );
+                particle.life = 1.0; // 存活壽命
+
+                scene.add(particle);
+                particles.push(particle);
+            }
+        }
+
+        // ==========================================
+        // 6. 控制與事件監聽 (Pointer Lock & WASD)
+        // ==========================================
+        function setupEvents() {
+            // 視窗尺寸改變時重置相機比例
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            // 點擊開始遊戲按鈕 -> 請求鎖定滑鼠
+            startBtn.addEventListener('click', () => {
+                document.body.requestPointerLock();
+            });
+
+            // Pointer Lock 狀態變更監聽
+            document.addEventListener('pointerlockchange', () => {
+                if (document.pointerLockElement === document.body) {
+                    isLocked = true;
+                    menuOverlay.classList.add('hidden');
+                    if (!player.isAlive) restartGame();
+                } else {
+                    isLocked = false;
+                    if (player.isAlive) {
+                        menuTitle.innerText = "遊戲暫停";
+                        menuSub.innerText = "點擊下方按鈕以繼續遊戲";
+                        startBtn.innerText = "繼續遊戲";
+                        menuOverlay.classList.remove('hidden');
+                    }
+                }
+            });
+
+            // 滑鼠移動視角 (Mouse Look)
+            document.addEventListener('mousemove', (event) => {
+                if (!isLocked || !player.isAlive) return;
+
+                const movementX = event.movementX || 0;
+                const movementY = event.movementY || 0;
+
+                euler.y -= movementX * 0.002;
+                euler.x -= movementY * 0.002;
+
+                // 限制俯仰角度，避免翻轉
+                euler.x = Math.max(Math.PI / 2 - maxPolarAngle, Math.min(Math.PI / 2 - minPolarAngle, euler.x));
+
+                camera.quaternion.setFromEuler(euler);
+            });
+
+            // 鍵盤按下事件
+            document.addEventListener('keydown', (e) => {
+                if (!isLocked) return;
+                switch (e.code) {
+                    case 'KeyW': player.moveForward = true; break;
+                    case 'KeyS': player.moveBackward = true; break;
+                    case 'KeyA': player.moveLeft = true; break;
+                    case 'KeyD': player.moveRight = true; break;
+                    case 'KeyR': reload(); break;
+                }
+            });
+
+            // 鍵盤放開事件
+            document.addEventListener('keyup', (e) => {
+                switch (e.code) {
+                    case 'KeyW': player.moveForward = false; break;
+                    case 'KeyS': player.moveBackward = false; break;
+                    case 'KeyA': player.moveLeft = false; break;
+                    case 'KeyD': player.moveRight = false; break;
+                }
+            });
+
+            // 滑鼠開火
+            document.addEventListener('mousedown', (e) => {
+                if (e.button === 0) shoot();
+            });
+        }
+
+        // 受傷處理
+        function takeDamage(amount) {
+            if (!player.isAlive) return;
+
+            player.hp -= amount;
+            if (player.hp < 0) player.hp = 0;
+
+            // 更新 UI
+            hpBarEl.style.width = `${(player.hp / player.maxHp) * 100}%`;
+            hpTextEl.innerText = `${player.hp} / ${player.maxHp}`;
+
+            // 受傷全螢幕紅框閃爍
+            damageIndicator.classList.remove('hidden');
+            damageIndicator.classList.add('damage-overlay');
+            setTimeout(() => {
+                damageIndicator.classList.add('hidden');
+                damageIndicator.classList.remove('damage-overlay');
+            }, 400);
+
+            // 玩家死亡判斷
+            if (player.hp <= 0) {
+                gameOver();
+            }
+        }
+
+        // 遊戲結束
+        function gameOver() {
+            player.isAlive = false;
+            document.exitPointerLock();
+            menuTitle.innerText = "戰術陣亡 GAME OVER";
+            menuTitle.className = "text-4xl font-black mb-2 text-red-500";
+            menuSub.innerText = `最終得分: ${player.score}`;
+            startBtn.innerText = "重新開始遊戲";
+            menuOverlay.classList.remove('hidden');
+        }
+
+        // 重置遊戲
+        function restartGame() {
+            player.hp = 100;
+            player.score = 0;
+            player.ammo = 30;
+            player.isAlive = true;
+
+            // 重置波數
+            waveSystem.currentWave = 1;
+            waveSystem.monstersToSpawn = 5;
+            waveSystem.spawnedCount = 0;
+            waveSystem.killedCount = 0;
+            waveSystem.spawnTimer = 0;
+            waveSystem.spawnInterval = 2.0;
+
+            hpBarEl.style.width = '100%';
+            hpTextEl.innerText = '100 / 100';
+            scoreTextEl.innerText = '0';
+            waveTextEl.innerText = '1';
+            ammoClipEl.innerText = '30';
+
+            // 清理所有 DOM 血條與 3D 物件
+            monsterHpLayer.innerHTML = '';
+            enemies.forEach(e => {
+                scene.remove(e);
+            });
+            bullets.forEach(b => scene.remove(b));
+            enemies = [];
+            bullets = [];
+
+            camera.position.set(0, player.height, 0);
+        }
+
+        // ==========================================
+        // 7. 主遊戲循環與物理 AI 追蹤邏輯 (Animation Loop)
+        // ==========================================
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = clock.getDelta();
+            const time = clock.getElapsedTime();
+
+            // 1. 夜空星星微弱閃爍動畫
+            if (starsField) {
+                starsField.rotation.y = time * 0.0005;
+            }
+
+            // 2. 波數系統更新
+            updateWaveSystem(delta);
+
+            if (isLocked && player.isAlive) {
+                // 3. 玩家移動物理計算
+                const moveVector = new THREE.Vector3();
+                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+                forward.y = 0; forward.normalize();
+                const side = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+                side.y = 0; side.normalize();
+
+                if (player.moveForward) moveVector.add(forward);
+                if (player.moveBackward) moveVector.sub(forward);
+                if (player.moveRight) moveVector.add(side);
+                if (player.moveLeft) moveVector.sub(side);
+
+                if (moveVector.lengthSq() > 0) {
+                    moveVector.normalize().multiplyScalar(player.speed);
+                    camera.position.add(moveVector);
+
+                    // 行走槍枝搖晃
+                    gunGroup.position.y = -0.22 + Math.sin(time * 10) * 0.008;
+                    gunGroup.position.x = 0.25 + Math.cos(time * 5) * 0.005;
+                }
+            }
+
+            // 4. 子彈移動與碰撞檢測
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const b = bullets[i];
+                b.position.add(b.velocity);
+                b.aliveTime += delta;
+
+                let bulletRemoved = false;
+
+                // 檢測與敵人的碰撞
+                for (let j = enemies.length - 1; j >= 0; j--) {
+                    const enemy = enemies[j];
+                    if (enemy.userData.isDissolving) continue;
+
+                    const enemyCenter = enemy.position.clone().add(new THREE.Vector3(0, enemy.userData.heightOffset * 0.5, 0));
+                    const dist = b.position.distanceTo(enemyCenter);
+
+                    if (dist < 0.85 * (enemy.userData.heightOffset / 1.8)) { // 命中怪物
+                        enemy.userData.hp -= 1;
+                        createHitParticles(b.position, false, MONSTER_TYPES[enemy.userData.type].eyeColor);
+
+                        // 移除子彈
+                        scene.remove(b);
+                        bullets.splice(i, 1);
+                        bulletRemoved = true;
+
+                        // 擊殺敵人判斷 (觸發死亡散落/溶解動畫)
+                        if (enemy.userData.hp <= 0) {
+                            enemy.userData.isDissolving = true;
+                            createHitParticles(enemyCenter, true, MONSTER_TYPES[enemy.userData.type].color);
+                            
+                            // 隱藏血條 UI
+                            if (enemy.userData.hpContainer) {
+                                enemy.userData.hpContainer.remove();
+                            }
+
+                            // 增加分數與擊殺統計
+                            player.score += enemy.userData.score;
+                            scoreTextEl.innerText = player.score;
+                            waveSystem.killedCount++;
+                        }
+                        break;
+                    }
+                }
+
+                // 子彈超時或超出邊界自動消失
+                if (!bulletRemoved && (b.aliveTime > 2.0 || b.position.length() > 100)) {
+                    scene.remove(b);
+                    bullets.splice(i, 1);
+                }
+            }
+
+            // 5. 敵人 AI 追蹤、轉向、溶解動畫與攻擊邏輯
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                const enemy = enemies[i];
+
+                // 處理死亡溶解散落狀態
+                if (enemy.userData.isDissolving) {
+                    enemy.userData.dissolveTime += delta;
+                    enemy.scale.multiplyScalar(0.92); // 漸小縮放
+                    enemy.position.y -= 0.02; // 下沉
+                    if (enemy.userData.dissolveTime > 0.6) {
+                        scene.remove(enemy);
+                        enemies.splice(i, 1);
+                    }
+                    continue;
+                }
+
+                // AI 轉向與精準追逐：讓怪物時刻正面朝向玩家
+                enemy.lookAt(camera.position.x, enemy.position.y, camera.position.z);
+
+                // 計算與玩家在地面 2D 平面上的距離
+                const dx = camera.position.x - enemy.position.x;
+                const dz = camera.position.z - enemy.position.z;
+                const distToPlayer = Math.sqrt(dx * dx + dz * dz);
+
+                if (distToPlayer > 1.2) {
+                    // 朝玩家方向前進移動
+                    const dir = new THREE.Vector3(dx, 0, dz).normalize();
+                    enemy.position.add(dir.multiplyScalar(enemy.userData.speed));
+                } else {
+                    // 靠近玩家時發動攻擊 (造成傷害與冷卻)
+                    if (time - enemy.userData.lastAttack > 1.0) {
+                        takeDamage(enemy.userData.damage);
+                        enemy.userData.lastAttack = time;
+                    }
+                }
+            }
+
+            // 6. 更新怪物頭頂血條 UI 位置
+            updateMonsterHpBars();
+
+            // 7. 粒子系統更新
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.position.add(p.velocity);
+                p.life -= delta * 2.5;
+                p.scale.multiplyScalar(0.92);
+
+                if (p.life <= 0) {
+                    scene.remove(p);
+                    particles.splice(i, 1);
+                }
+            }
+
+            // 執行 WebGL 渲染
+            renderer.render(scene, camera);
+        }
+
+        // 當頁面加載完成時初始化遊戲
+        window.onload = init;
+    </script>
+</body>
+</html>
